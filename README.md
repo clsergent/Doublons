@@ -2,7 +2,7 @@
 Duplicate files search and removal
 
 # Purpose
-DoublonsV3.py is a script intended to find duplicates in a directory using a hash function. It outputs a customizable csv file containing the duplicates. It has been intensively used on a high volume of files on a debian OS running a a bare metal server.
+DoublonsV3.py is a script intended to find duplicates in a directory using a hash function. It outputs a customizable csv file containing the duplicates. It has been intensively used on a high volume of files managed by a debian OS running on a bare metal server.
 
 DoublonsV2.py is provided for python 2.7 as a stopgap only.
 
