@@ -13,5 +13,7 @@ If no Python 3 is useable, DoublonsV2.py may be used insead. It is not safe to u
 # Commandline
 type *python3 DoublonsV3.py -h* to get help
 
-# Licence
-This repository and its content is provided under the European Union Public License 1.2
+# License
+This repository and its content are licensed under the EUPL-1.2-or-later
+Check https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12 to read it in one of the 23 langages of the UE.
+
