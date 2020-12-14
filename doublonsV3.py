@@ -2,42 +2,40 @@
 #-*- coding: utf-8 -*-
  
 #################################################
-# Copy Finder : a simple script to find doubles #
+# DuplicatesFinder : a simple script to find duplicates #
 #################################################
 
 # 1. FilesCrawler = generate a hash (based on a limited number of bytes) for each file in rootDirectory
-# 2. HashsHandler = stores hashs and detect potential doubles
-# 3. CopyChecker = calculate a complete hash for each file received and export a list of doubles
+# 2. HashsHandler = stores hashes and detect potential duplicates
+# 3. DuplicateChecker = calculate a complete hash for each file received and export a list of duplicates
 
 __author__ = 'clsergent'
-__version__ = '2.1 - 05DEC2020'
-__licence__ = 'GPLv3'
+__version__ = '2.2 - 14DEC2020'
+__licence__ = 'EUPL1.2'
 
 import os
 import argparse
 import multiprocessing
+import hashlib
 import timeit
 
 QUEUE_END = '\x03\x04'      #signal transmitted to close a queue
-HASH_BYTES = 15000      #default number of bytes to read for a partial hash (-1 = EOF)
-HASH_FUNCTIONS = ('md5', 'sha', 'default')
+HASH_BYTES = 15000          #default number of bytes to read for a partial hash (-1 = EOF)
+HASH_BLOCKSIZE = 65536      #max length to feed the hash function in a row
+HASH_FUNCTIONS = hashlib.algorithms_available
 REDUCED_LENGTH = 4
 SPLIT_SYMBOL = "; "         #default symbol to separate data in the export file
 PREFIX_PATH = ''
 
 class Process(multiprocessing.Process):
     """standard process class"""
-    def __init__(self, *args, hashFunction=None, **kwds):
+    def __init__(self, *args, hashFunction='md5', **kwds):
         multiprocessing.Process.__init__(self, *args, **kwds)
         
-        if hashFunction == 'md5':
-            self._hashFunction = self.md5Hash
-        
-        elif hashFunction == 'sha':
-            self._hashFunction = self.shaHash
-        
+        if hasattr(hashlib, hashFunction):
+            self._hashFunction = getattr(hashlib, hashFunction)
         else:
-            self._hashFunction = self.defaultHash
+            raise ValueError("invalid hash function supplied")
     
     def log(self, *logs, verbose=False):
         """simple log method"""
@@ -46,20 +44,6 @@ class Process(multiprocessing.Process):
     
     def getHashFunction(self):
         return self._hashFunction
-    
-    @staticmethod
-    def md5Hash(arg):
-        importlib.import_module('md5')
-        return md5.md5(arg).digest()
-    
-    @staticmethod
-    def shaHash(arg):
-        importlib.import_module('sha')
-        return sha.sha(arg).digest()
-    
-    #@staticmethod
-    def defaultHash(self, arg):
-        return str(hash(arg))
     
     hashFunction = property(getHashFunction)
     
@@ -70,7 +54,6 @@ class FilesCrawler(Process):
         Process.__init__(self, hashFunction= hashFunction)
         
         self._rootDirectory = rootDirectory
-        #self._hashFunction =
         self._hashBytes = hashBytes #hash is processed only on the first bytes (-1 -> EOF)
         self._outQueue = multiprocessing.Queue() # queue to export hashs/paths
     
@@ -92,14 +75,6 @@ class FilesCrawler(Process):
                 
                 if not os.path.isfile(path):    #avoid non regular files
                     continue
-                    
-                if fileName[0] == '~':          #remove temporary files (starting by ~)
-                    try:
-                        os.unlink(path)
-                        self.log('removed temporary file {0}'.format(path), verbose=True)
-                        continue
-                    except:
-                        continue
                 
                 try:                            #avoid empty files (which can't be accurately compared)
                     if os.lstat(path).st_size == 0:
@@ -108,9 +83,10 @@ class FilesCrawler(Process):
                     continue
                 
                 try:                            #generate a hash sent to outQueue
+                    hasher = self.hashFunction()
                     with open(path, 'rb') as file:
-                        hash = self.hashFunction(file.read(self._hashBytes))
-                    self._outQueue.put((hash, path))
+                        hasher.update(file.read(self._hashBytes))
+                    self._outQueue.put((hasher.digest(), path))
                 except:
                     self.log('an error occured while reading {0}'.format(path))
                 else:
@@ -130,7 +106,7 @@ class HashHandler(Process):
         
         self._inQueue = inQueue    	#queue from FilesCrawler
         self._outQueue = outQueue  	#queue to the CopyChecker
-        self._hashs= dict()         #dict of hash:[path|True]
+        self._hashes= dict()         #dict of hash:[path|True]
         self._reduced = list()      #reduced list of hashs
     
     def run(self):
@@ -145,15 +121,15 @@ class HashHandler(Process):
             if type(value) is tuple and len(value) == 2:
                 hash, path = value
                 if hash[:REDUCED_LENGTH] in self._reduced:      #seach in reduced (fast)
-                    if self._hashs.get(hash, False):            #search full hash (slow/accurate)
-                        if self._hashs[hash]:                   #if a path is found, there is no double yet
-                            self._outQueue.put((hash,self._hashs[hash]))    #send the first path
-                            self._hashs[hash]= True             #True means that there are doubles already
+                    if self._hashes.get(hash, False):            #search full hash (slow/accurate)
+                        if self._hashes[hash]:                   #if a path is found, there is no double yet
+                            self._outQueue.put((hash,self._hashes[hash]))    #send the first path
+                            self._hashes[hash]= True             #True means that there are doubles already
                             
                         self._outQueue.put((hash,path))         #send the double
                         
                 else:
-                    self._hashs[hash] = path                    #add a new value
+                    self._hashes[hash] = path                    #add a new value
                     self._reduced.append(hash[:REDUCED_LENGTH])
                     
             else:
@@ -195,8 +171,11 @@ class CopyChecker(Process):
                     continue
                     
                 if os.lstat(path).st_size > self._hashBytes:    #get full hash if file length exceed hashBytes
+                    hasher = self.hashFunction()
                     with open(path, 'rb') as file:
-                        hash = self._hashFunction(file.read())
+                        while data := file.read(HASH_BLOCKSIZE):
+                            hasher.update(data)
+                        hash = hasher.digest()
                         
                 if self._copies.get(hash, False):
                     self._copies[hash].append(path)
@@ -269,6 +248,9 @@ def checkArgs(args):
     
     if not args.prefixPath:
         args.prefixPath = PREFIX_PATH
+    
+    if not args.hashFunction:
+        args.hashFunction = 'md5'
     
     return args
 
