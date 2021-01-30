@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-#-*- coding: utf-8 -*-
  
 #########################################################
 # DuplicatesFinder : a simple script to find duplicates #
@@ -19,13 +18,14 @@ import multiprocessing
 import hashlib
 import timeit
 
-QUEUE_END = '\x03\x04'      #signal transmitted to close a queue
-HASH_BYTES = 15000          #default number of bytes to read for a partial hash (-1 = EOF)
-HASH_BLOCKSIZE = 65536      #max length to feed the hash function in a row
-HASH_FUNCTIONS = hashlib.algorithms_available
-REDUCED_LENGTH = 4
-SPLIT_SYMBOL = "; "         #default symbol to separate data in the export file
-PREFIX_PATH = ''
+QUEUE_END = '\x03\x04'      # signal transmitted to close a queue
+HASH_BYTES = 15000          # default number of bytes to read for a partial hash (-1 = EOF)
+HASH_BLOCK_SIZE = 65536     # max length to feed the hash function in a row
+HASH_FUNCTIONS = hashlib.algorithms_guaranteed
+REDUCED_LENGTH = 4          # number of bytes taken from hash to build a faster dictionnary
+SPLIT_SYMBOL = "; "         # default symbol to separate data in the csv file
+PREFIX_PATH = ''            # default prefix added to each path in the csv file (used for relative paths)
+
 
 class Process(multiprocessing.Process):
     """standard process class"""
@@ -36,28 +36,28 @@ class Process(multiprocessing.Process):
             self._hashFunction = getattr(hashlib, hashFunction)
         else:
             raise ValueError("invalid hash function supplied")
-    
+
+    @property
+    def hashFunction(self):
+        return self._hashFunction
+
     def log(self, *logs, verbose=False):
         """simple log method"""
         if not verbose:
             print("{}:".format(self.name), *logs)
     
-    def getHashFunction(self):
-        return self._hashFunction
-    
-    hashFunction = property(getHashFunction)
-    
 
 class FilesCrawler(Process):
-    """generate a hash based on the first bytes (hashBytes) for each file in rootDirectory"""
+    """generate a hash based on the first bytes (hashBytes) for each file in the root directory"""
     def __init__(self, rootDirectory, hashFunction, hashBytes=-1, **kwds):
         Process.__init__(self, hashFunction= hashFunction)
         
         self._rootDirectory = rootDirectory
         self._hashBytes = hashBytes # hash is processed only on the first bytes (-1 -> EOF)
         self._outQueue = multiprocessing.Queue() # queue to export hashs/paths
-    
-    def getQueue(self):
+
+    @property
+    def queue(self):
         """return the queue"""
         return self._outQueue
     
@@ -72,32 +72,32 @@ class FilesCrawler(Process):
         for root, dirs, files in os.walk(self._rootDirectory):
             for fileName in files:
                 path = os.path.join(root,fileName)
-                
-                if not os.path.isfile(path):    #avoid non regular files
-                    continue
-                
-                try:                            #avoid empty files (which can't be accurately compared)
-                    if os.lstat(path).st_size == 0:
-                        continue
+
+                # avoid non regular files
+                if not os.path.isfile(path): continue
+
+                # avoid empty files (which can't be accurately compared)
+                try:
+                    if os.lstat(path).st_size == 0: continue
                 except:
                     continue
-                
-                try:                            #generate a hash sent to outQueue
+
+                # generate a hash sent to outQueue
+                try:
                     hasher = self.hashFunction()
                     with open(path, 'rb') as file:
                         hasher.update(file.read(self._hashBytes))
                     self._outQueue.put((hasher.digest(), path))
                 except:
-                    self.log('an error occured while reading {0}'.format(path))
+                    self.log('an error occurred while reading {0}'.format(path))
                 else:
                    self.log('{0} -> {1}'.format(path, hash), verbose=True)
                                 
             totalFiles += len(files)
-            self.log('{0}Controled : {1:8}'.format('\x08'*21, totalFiles))
+            self.log('{0} controlled : {1:8}'.format('\x08'*21, totalFiles))
             
         self._outQueue.put(QUEUE_END)           #close the queue
-    
-    queue = property(getQueue)
+
 
 class HashHandler(Process):
     """Process in charge of collecting and filtering hashs"""
@@ -115,14 +115,14 @@ class HashHandler(Process):
         self.getHashs()
     
     def getHashs(self):
-        """retrieve hashs from queue"""
+        """retrieve hashes from queue"""
         value = self._inQueue.get()
         while value != QUEUE_END:
             if type(value) is tuple and len(value) == 2:
                 hash, path = value
                 if hash[:REDUCED_LENGTH] in self._reduced:      #seach in reduced (fast)
                     if self._hashes.get(hash, False):            #search full hash (slow/accurate)
-                        if self._hashes[hash]:                   #if a path is found, there is no double yet
+                        if self._hashes[hash]:                   #if a path is found, there is no duplicate yet
                             self._outQueue.put((hash,self._hashes[hash]))    #send the first path
                             self._hashes[hash]= True             #True means that there are doubles already
                             
@@ -140,6 +140,7 @@ class HashHandler(Process):
         self._inQueue.close()
         self._outQueue.put(QUEUE_END)
 
+
 class CopyChecker(Process):
     """process in charge of verifying and exporting duplicates"""
     def __init__(self, exportFile, splitSymbol, hashFunction, hashBytes= -1, prefixPath= '', encoding= None, separator= None, **kwds):
@@ -154,32 +155,41 @@ class CopyChecker(Process):
         
         self._copies = dict()                       #copies to export
         self._inQueue = multiprocessing.Queue()     #queue to the CopyChecker
-    
+
+    @property
+    def queue(self):
+        """return the queue"""
+        return self._inQueue
+
     def run(self):
         self.log('pid is {0}'.format(self.pid))
         self.checkCopies()
         self.export()
     
     def checkCopies(self):
+        """execute an complete check over potential duplicates"""
         value = self._inQueue.get()
         while value != QUEUE_END:
             if type(value) is tuple and len(value) == 2:
                 hash, path = value
-                
-                if not os.path.isfile(path):                    #avoid invalid path (likely deleted file)
+
+                # avoid invalid path (likely deleted file)
+                if not os.path.isfile(path):
                     value = self._inQueue.get()
                     continue
-                    
-                if os.lstat(path).st_size > self._hashBytes:    #get full hash if file length exceed hashBytes
+
+                # get full hash if file length exceed hashBytes
+                if os.lstat(path).st_size > self._hashBytes:
                     hasher = self.hashFunction()
-                    with open(path, 'rb') as file:
-                        while data := file.read(HASH_BLOCKSIZE):
+                    with open(path, 'rb', buffering= False) as file:
+                        while data := file.read(HASH_BLOCK_SIZE):
                             hasher.update(data)
                         hash = hasher.digest()
-                        
+
+                # append the file or create a new entry
                 if self._copies.get(hash, False):
                     self._copies[hash].append(path)
-                else:                                           #add a new entry if necessary
+                else:
                     self._copies[hash] = [path]
                     
             else:
@@ -193,50 +203,50 @@ class CopyChecker(Process):
         """export duplicates"""
         with open(self._exportFile, 'w', encoding=self._encoding) as f:
             for value in self._copies.values():
-                if len(value) >= 2:     #only write copies (at least two files)
+
+                # only write copies (at least two files)
+                if len(value) >= 2:
+                    # add the prefix
                     line = self._splitSymbol.join([self._prefixPath + v for v in value])
-                        
-                    if self._separator: #change the separator
+
+                    # if requested, change the separator (for cross-platform purposes (e.g. SMB)
+                    if self._separator:
                         line = line.replace(os.path.sep, self._separator)
                         
                     f.write('{0}{1}{2}\n'.format(os.lstat(value[0]).st_size, self._splitSymbol, line))
-    
-    def getQueue(self):
-        """return the queue"""
-        return self._inQueue
-        
-    queue = property(getQueue)
+
     
 def getArgs():
     """parse script arguments"""
     parser = argparse.ArgumentParser(description='Script looking for doubles')
     
-    #arguments for FilesCrawler process
-    parser.add_argument('rootDirectory', type=str, help='Root directory to seach for doubles')
+    # arguments for FilesCrawler process
+    parser.add_argument('rootDirectory', type=str, help='root directory to search for duplicates')
     parser.add_argument('-f', '--hashFunction', type=str, help="hash function to use from list {0}".format(HASH_FUNCTIONS))
-    parser.add_argument('-b', '--hashBytes', type=int, help="first hash is performed only on first HASHBYTES")
+    parser.add_argument('-b', '--hashBytes', type=int, help="number of bytes used for the first hash")
     
-    #arguments for CopyChecker
-    parser.add_argument('exportFile', type=str, help="File containing hahs")
-    parser.add_argument('-p', '--prefixPath', type=str, help="add a prefix to the paths in exportFile")
-    parser.add_argument('-e', '--encoding', type=str, help="encode exportFile using encoding (utf8, latin1)")
-    parser.add_argument('-s', '--separator', type=str, help="set a specific pathname separator for data in exportFile")
-    parser.add_argument('-S', '--splitSymbol', type=str, help="set a specific symbol to separate data in exportFile")
+    # arguments for CopyChecker
+    parser.add_argument('exportFile', type=str, help="csv file filled with duplicates info")
+    parser.add_argument('-p', '--prefixPath', type=str, help="a prefix added to the paths in exportFile")
+    parser.add_argument('-e', '--encoding', type=str, help="encoding used to encode exportFile (utf8, latin1)")
+    parser.add_argument('-s', '--separator', type=str, help="specific pathname separator for data in exportFile")
+    parser.add_argument('-S', '--splitSymbol', type=str, help="specific symbol to separate data in exportFile")
     
-    #general arguments
-    parser.add_argument('-g', '--logFile', type=str, help="write log to logFile")
+    # general arguments
+    parser.add_argument('-g', '--logFile', type=str, help="log file")
     parser.add_argument('-d', '--daemon', action='store_true', help="run as daemon")
     
     return parser.parse_args()
 
+
 def checkArgs(args):
-    """check args"""
+    """check args from argparse"""
     
-    #rootDirectory
+    # rootDirectory
     if not os.path.isdir(args.rootDirectory):
         raise ValueError("rootDirectory is invalid")
     
-    #exportFile
+    # exportFile
     if not os.path.isdir(os.path.dirname(args.exportFile)):
         raise ValueError("exportFile is invalid")
     
@@ -270,6 +280,7 @@ def run():
         checker.start()
     else:
         checker.run()
+
 
 if __name__ == '__main__':
     timer = timeit.Timer('run()', 'from __main__ import run')
