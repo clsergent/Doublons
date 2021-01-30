@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 #-*- coding: utf-8 -*-
  
-#################################################
+#########################################################
 # DuplicatesFinder : a simple script to find duplicates #
-#################################################
+#########################################################
 
 # 1. FilesCrawler = generate a hash (based on a limited number of bytes) for each file in rootDirectory
 # 2. HashsHandler = stores hashes and detect potential duplicates
@@ -54,7 +54,7 @@ class FilesCrawler(Process):
         Process.__init__(self, hashFunction= hashFunction)
         
         self._rootDirectory = rootDirectory
-        self._hashBytes = hashBytes #hash is processed only on the first bytes (-1 -> EOF)
+        self._hashBytes = hashBytes # hash is processed only on the first bytes (-1 -> EOF)
         self._outQueue = multiprocessing.Queue() # queue to export hashs/paths
     
     def getQueue(self):
