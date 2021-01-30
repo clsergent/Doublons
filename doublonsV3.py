@@ -233,7 +233,7 @@ def getArgs():
     parser.add_argument('-S', '--splitSymbol', type=str, help="specific symbol to separate data in exportFile")
     
     # general arguments
-    parser.add_argument('-g', '--logFile', type=str, help="log file")
+    # parser.add_argument('-g', '--logFile', type=str, help="log file")
     parser.add_argument('-d', '--daemon', action='store_true', help="run as daemon")
     
     return parser.parse_args()
